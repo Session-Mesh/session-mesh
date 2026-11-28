@@ -8,6 +8,11 @@
 (* The live Linux backend checks need procfs; the CLI checks run on Linux and
    macOS (the cases that need /dev/full or a Linux executable build only where
    those exist). *)
+let () =
+  if Array.length Sys.argv = 2 && Sys.argv.(1) = "--environment-fixture" then (
+    Unix.sleep 30;
+    exit 0)
+
 let live_suites =
   match Mesh_platform.platform with
   | Mesh_platform.Linux ->

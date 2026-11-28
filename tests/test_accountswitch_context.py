@@ -112,7 +112,8 @@ def test_actual_process_home_is_observed():
     assert result["root"].startswith("/")
 
 
-def test_server_binds_default_to_observed_agent(monkeypatch):
+def test_server_binds_default_to_linux_observed_agent(monkeypatch):
+    monkeypatch.setattr(server, "sys", SimpleNamespace(platform="linux"))
     observed = {"type": "codex", "pid": 42, "foreground": True}
     selected = {**accountswitch.default_context("codex", {"HOME": "/tmp/alice"}),
                 "process_pid": 42, "process_start": "1234"}
@@ -124,6 +125,78 @@ def test_server_binds_default_to_observed_agent(monkeypatch):
         asyncio.run(server._switch_profile_context("default", "codex", "0" * 64, observed))
     with pytest.raises(web.HTTPConflict):
         asyncio.run(server._switch_profile_context("default", "codex", observed_agent={**observed, "foreground": False}))
+
+def test_darwin_native_switch_qualifies_supported_agents(monkeypatch):
+    monkeypatch.setattr(server, "sys", SimpleNamespace(platform="darwin"))
+    monkeypatch.setattr(server, "NATIVE_SWITCH_QUALIFIED", False)
+    assert all(server._native_switch_platform_qualified(kind) for kind in ("codex", "claude", "pi"))
+    assert not any(server._native_switch_platform_qualified(kind)
+                   for kind in ("opencode", None))
+
+
+@pytest.mark.parametrize("case", ["default_home", "wrong_terminal", "named_mismatch", "invalid_reply"])
+def test_darwin_account_confirmation_is_bound_to_the_original_terminal(monkeypatch, case):
+    calls = []
+    observed = {"type": "codex", "pid": 42, "foreground": True}
+    source = {"pid": 40}
+
+    async def host(message):
+        assert message == {"op": "processes", "pids": [42]}
+        return {"version": 1, "complete": True, "errors": [],
+                "processes": [{"pid": 42, "sid": 41 if case == "wrong_terminal" else 40, "incarnation": "1234"}]}
+
+    async def accounts(*args, request):
+        assert args == ("confirm-environment", "42", "1234")
+        calls.append(request)
+        return {"matches": "true" if case == "invalid_reply" else request["key"] == "HOME"}
+
+    monkeypatch.setattr(server, "host", host)
+    monkeypatch.setattr(server, "_accounts_program", accounts)
+
+    async def observe():
+        return await server._darwin_switch_observation(source, observed, "codex", "/tmp/account/.codex",
+                                                       default_home=None if case == "named_mismatch" else "/tmp/account")
+
+    if case != "default_home":
+        error = web.HTTPConflict if case == "wrong_terminal" else accountswitch.UnboundDefault
+        with pytest.raises(error):
+            asyncio.run(observe())
+        assert [request["key"] for request in calls] == ([] if case == "wrong_terminal" else ["CODEX_HOME"])
+        return
+    assert asyncio.run(observe()) == {"process_pid": 42, "process_start": "1234"}
+    assert [(request["key"], request["expected"]) for request in calls] == [
+        ("CODEX_HOME", "/tmp/account/.codex"), ("HOME", "/tmp/account")]
+    assert "CODEX_HOME" in calls[1]["unset"]
+    assert "OPENAI_API_KEY" in calls[0]["unset"] and "OPENAI_API_KEY" in calls[1]["unset"]
+
+
+
+@pytest.mark.parametrize("agent,variable,directory", [
+    ("codex", "CODEX_HOME", ".codex"),
+    ("claude", "CLAUDE_CONFIG_DIR", ".claude"),
+])
+@pytest.mark.parametrize("matches_home", [True, False])
+def test_darwin_default_switch_with_explicit_server_root(monkeypatch, agent, variable, directory, matches_home):
+    home = "/tmp/owner"
+    root = f"{home}/{directory}" if matches_home else "/tmp/other"
+    monkeypatch.setattr(server, "sys", SimpleNamespace(platform="darwin"))
+    monkeypatch.setattr(server, "os", SimpleNamespace(environ={"HOME": home, variable: root}, path=os.path))
+
+    async def observe(_source, _observed, kind, expected_root, *, default_home):
+        assert kind == agent and expected_root == root
+        assert default_home == (home if matches_home else None)
+        if default_home is None:
+            raise accountswitch.UnboundDefault("Agent account folder differs from the recorded profile")
+        return {"process_pid": 42, "process_start": "1234"}
+
+    monkeypatch.setattr(server, "_darwin_switch_observation", observe)
+    observed = {"type": agent, "pid": 42, "foreground": True}
+    if matches_home:
+        context = asyncio.run(server._switch_profile_context("default", agent, observed_agent=observed))
+        assert context["roots"]["config"] == root
+    else:
+        with pytest.raises(web.HTTPConflict):
+            asyncio.run(server._switch_profile_context("default", agent, observed_agent=observed))
 
 
 def test_approved_native_switch_does_not_fall_back_when_registry_disappears(monkeypatch):
@@ -833,6 +906,7 @@ def test_switch_qualification_requires_supported_agent_and_bound_host(monkeypatc
 
 
 def test_unqualified_platform_refuses_even_a_capable_host(monkeypatch):
+    monkeypatch.setattr(server, "sys", SimpleNamespace(platform="unsupported"))
     monkeypatch.setattr(server, "NATIVE_SWITCH_QUALIFIED", False)
     monkeypatch.setattr(server, "_native_profile_mode", lambda: True)
     raw = {"meta": {}, "pty_capabilities": ["agent_relaunch_v1", "agent_relaunch_bound_v1"]}

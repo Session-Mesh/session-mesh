@@ -33,13 +33,25 @@ let environment_with overrides =
 
 (* Run with [argv] (argv.(0) included), [env] overrides, stdout to a pipe;
    return (exit status, stdout, stderr). *)
-let run ?(env = []) argv =
+let run ?(env = []) ?input argv =
   let out_read, out_write = Unix.pipe ~cloexec:true () in
   let err_read, err_write = Unix.pipe ~cloexec:true () in
   let environment = environment_with env in
-  let child =
-    Unix.create_process_env exe argv environment Unix.stdin out_write err_write
+  let input_pipe =
+    Option.map
+      (fun text ->
+        let read, write = Unix.pipe ~cloexec:true () in
+        let channel = Unix.out_channel_of_descr write in
+        output_string channel text;
+        close_out channel;
+        read)
+      input
   in
+  let child =
+    Unix.create_process_env exe argv environment
+      (Option.value input_pipe ~default:Unix.stdin) out_write err_write
+  in
+  Option.iter Unix.close input_pipe;
   Unix.close out_write;
   Unix.close err_write;
   let stdout_text = read_all out_read in
@@ -403,6 +415,53 @@ let shadowed_cases =
         ("/usr/bin/bwrap", Mesh_platform.Demo_sandbox);
       ]
 
+let test_account_environment_input () =
+  let argv =
+    [| "mesh-platform"; "accounts"; "confirm-environment";
+       string_of_int (Unix.getpid ()); "1" |]
+  in
+  let check expected input =
+    let status, stdout_text, _ = run ~input argv in
+    Alcotest.(check bool) "exit 1" true (status = Unix.WEXITED 1);
+    Alcotest.(check string) "error kind" expected (kind_of stdout_text)
+  in
+  check "malformed"
+    {|{"key":"CODEX_HOME","expected":"/tmp/profile","unset":["OPENAI_BASE_URL","OPENAI_BASE_URL"]}|};
+  check "malformed"
+    {|{"key":"CODEX_HOME","expected":"relative/profile","unset":[]}|};
+  check "malformed"
+    {|{"key":"CODEX_HOME","expected":"/tmp/profile","unset":["CODEX_HOME"]}|};
+  check "malformed"
+    (`Assoc
+       [ ("key", `String "CODEX_HOME");
+         ("expected", `String ("/" ^ String.make 8192 'x'));
+         ("unset", `List []) ]
+     |> Yojson.Safe.to_string);
+  check
+    (if Mesh_platform.platform = Mesh_platform.Macos then "not_found"
+     else "unsupported")
+    {|{"key":"CODEX_HOME","expected":"/tmp/profile","unset":["OPENAI_BASE_URL"]}|}
+
+let test_pi_profile_observation_input () =
+  let argv =
+    [| "mesh-platform"; "accounts"; "observe-pi-overlay";
+       string_of_int (Unix.getpid ()); "1" |]
+  in
+  let check expected input =
+    let status, stdout_text, _ = run ~input argv in
+    Alcotest.(check bool) "exit 1" true (status = Unix.WEXITED 1);
+    Alcotest.(check string) "error kind" expected (kind_of stdout_text)
+  in
+  check "malformed" {|{"history":"relative","overlay_root":"/tmp/overlays","unset":[]}|};
+  check "malformed"
+    {|{"history":"/tmp/history","overlay_root":"/tmp/overlays","unset":["PI_CODING_AGENT_DIR"]}|};
+  check "malformed"
+    {|{"history":"/tmp/history","overlay_root":"/tmp/overlays","unset":["OVERRIDE","OVERRIDE"]}|};
+  check
+    (if Mesh_platform.platform = Mesh_platform.Macos then "not_found"
+     else "unsupported")
+    {|{"history":"/tmp/history","overlay_root":"/tmp/overlays","unset":["OVERRIDE"]}|}
+
 let tests =
   [
     Alcotest.test_case "require isolated-agent" `Quick
@@ -418,6 +477,10 @@ let tests =
     Alcotest.test_case "runtime_dir error kind" `Quick test_runtime_dir_kind;
     Alcotest.test_case "not_found error kind" `Quick test_not_found_kind;
     Alcotest.test_case "pid must be decimal digits" `Quick test_pid_is_decimal;
+    Alcotest.test_case "account environment request" `Quick
+      test_account_environment_input;
+    Alcotest.test_case "Pi profile observation request" `Quick
+      test_pi_profile_observation_input;
     Alcotest.test_case "invalid UTF-8 is replaced" `Quick
       test_invalid_utf_8_is_replaced;
   ]

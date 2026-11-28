@@ -9,9 +9,25 @@ import {rolloutIn} from './fake-codex-lib.ts';
 import {REPO} from './mesh-server-lib.ts';
 import {createSessionRequestGate, setTranslator} from '../static/pane-actions.ts';
 import {SKIP, PROFILE_SKIP, CARRY, mesh, log, travelHome, workHome, sleep, launches, owner,
-  codexSession, listed, arrange, arrangement, LABEL, installNativeProfiles, nativeProfiles,
+  clientClaude, fixtureSession, codexSession, listed, arrange, arrangement, LABEL, installNativeProfiles, nativeProfiles,
   consentPolicy, unchangedSource, ask, requested, refused, decide, launchOf,
   type Session, type Request} from './session-account-switch-fixture.ts';
+
+async function darwinAccountHome(pid: number): Promise<string> {
+  // The live fixture keeps its account's rollout open on fd 3, even after exec.
+  const deadline = performance.now() + 5000;
+  while (performance.now() < deadline) {
+    const result = spawnSync('/usr/sbin/lsof', ['-nP', '-a', '-p', String(pid), '-d', '3', '-Fn'],
+      {encoding: 'utf8', timeout: Math.max(1, Math.ceil(deadline - performance.now()))});
+    assert.ifError(result.error);
+    const account = result.stdout.match(/^n(.+)\/sessions\/\d{4}\/\d{2}\/\d{2}\/rollout-[^/]+\.jsonl$/m);
+    if (result.status === 0 && account) return account[1];
+    await sleep(50);
+  }
+  assert.fail('the running fixture did not open its account rollout');
+}
+
+const nativeCodexSwitch = ['linux', 'darwin'].includes(process.platform);
 
 describe('account switch requests', {skip: SKIP}, () => {
   let source: Session;
@@ -148,7 +164,7 @@ describe('account switch requests', {skip: SKIP}, () => {
   });
 
   test('native profiles refuse before queueing, across profile and default directions despite skip consent',
-    {skip: process.platform === 'linux' ? 'native switches are qualified on Linux' : PROFILE_SKIP}, async () => {
+    {skip: nativeCodexSwitch ? 'native Codex switching is qualified' : PROFILE_SKIP}, async () => {
     const registry = installNativeProfiles();
     try {
       await nativeProfiles();
@@ -186,7 +202,7 @@ describe('account switch requests', {skip: SKIP}, () => {
   });
 
   test('parallel native profiles isolate processes and an approved switch leaves the other sessions intact',
-    {skip: PROFILE_SKIP || (process.platform !== 'linux' ? '/proc process environment required' : false)}, async () => {
+    {skip: PROFILE_SKIP || (nativeCodexSwitch ? false : 'bound native switching is not enabled')}, async () => {
     const registry = installNativeProfiles();
     try {
       await nativeProfiles();
@@ -195,7 +211,8 @@ describe('account switch requests', {skip: SKIP}, () => {
         codexSession('native-work', 'work'), codexSession('native-travel', 'travel'), codexSession('native-default'),
       ]);
       const pidOf = (name: string) => Number(fs.readFileSync(`${log}.${name}`, 'utf8').trim());
-      const actualHome = (pid: number) => {
+      const actualHome = async (pid: number) => {
+        if (process.platform === 'darwin') return darwinAccountHome(pid);
         const env = fs.readFileSync(`/proc/${pid}/environ`, 'utf8').split('\0');
         const homes = env.filter(item => item.startsWith('HOME='));
         const codexHomes = env.filter(item => item.startsWith('CODEX_HOME='));
@@ -203,7 +220,9 @@ describe('account switch requests', {skip: SKIP}, () => {
         assert.ok(codexHomes.length <= 1, 'the running agent exposes at most one CODEX_HOME');
         return codexHomes[0]?.slice(11) || path.join(homes[0]!.slice(5), '.codex');
       };
+      const expectedHome = (home: string) => process.platform === 'darwin' ? fs.realpathSync(home) : home;
       const awaitExec = async (pid: number) => {
+        if (process.platform === 'darwin') return;
         for (let attempt = 0; attempt < 100; attempt++) {
           try {
             // The executable path can become visible before /proc exposes the new environment.
@@ -218,11 +237,20 @@ describe('account switch requests', {skip: SKIP}, () => {
       };
       const workPid = pidOf(work.name), travelPid = pidOf(travel.name), plainPid = pidOf(plain.name);
       await Promise.all([workPid, travelPid, plainPid].map(awaitExec));
-      assert.deepEqual([actualHome(workPid), actualHome(travelPid), actualHome(plainPid)],
-        [workHome, travelHome, path.join(mesh.home, '.codex')]);
+      assert.deepEqual(await Promise.all([workPid, travelPid, plainPid].map(actualHome)),
+        [workHome, travelHome, path.join(mesh.home, '.codex')].map(expectedHome));
       const defaultAuth = path.join(mesh.home, '.codex', 'auth.json');
       fs.writeFileSync(defaultAuth, '{"fakeAccount":"default"}');
       fs.writeFileSync(path.join(workHome, 'auth.json'), '{"fakeAccount":"work-relogin"}');
+      const ttyOf = (pid: number) => {
+        const result = spawnSync('ps', ['-p', String(pid), '-o', 'tty='], {encoding: 'utf8'});
+        assert.ifError(result.error);
+        assert.equal(result.status, 0, result.stderr);
+        const tty = result.stdout.trim();
+        assert.match(tty, /^(?:pts\/\d+|ttys\w+)$/);
+        return tty;
+      };
+      const originalTty = ttyOf(workPid);
       const before = (await listed(work.name))!;
       const switched = await decide(await requested(work, 'travel'), true);
       assert.equal(switched.state, 'completed', JSON.stringify(switched));
@@ -230,12 +258,14 @@ describe('account switch requests', {skip: SKIP}, () => {
       const switchedPid = pidOf(work.name);
       assert.notEqual(switchedPid, workPid, 'the agent was relaunched');
       await awaitExec(switchedPid);
-      assert.equal(actualHome(switchedPid), travelHome);
+      assert.equal(await actualHome(switchedPid), expectedHome(travelHome));
+      assert.equal(ttyOf(switchedPid), originalTty, 'the new process keeps the original terminal');
       assert.equal((await listed(work.name))!.id, before.id);
       assert.equal(launches().findLast(fields => fields[2] === work.name)?.[4], work.token,
         'the relaunched agent keeps the session token');
       assert.deepEqual([pidOf(travel.name), pidOf(plain.name)], [travelPid, plainPid]);
-      assert.deepEqual([actualHome(travelPid), actualHome(plainPid)], [travelHome, path.join(mesh.home, '.codex')]);
+      assert.deepEqual(await Promise.all([travelPid, plainPid].map(actualHome)),
+        [travelHome, path.join(mesh.home, '.codex')].map(expectedHome));
       assert.equal(fs.readFileSync(defaultAuth, 'utf8'), '{"fakeAccount":"default"}');
       const made = await ask(plain, {action: 'restart'});
       assert.equal(made.status, 202, await made.clone().text());
@@ -246,12 +276,88 @@ describe('account switch requests', {skip: SKIP}, () => {
       const restartedPid = pidOf(plain.name);
       assert.notEqual(restartedPid, plainPid, 'restart launches a new agent');
       await awaitExec(restartedPid);
-      assert.equal(actualHome(restartedPid), path.join(mesh.home, '.codex'));
+      assert.equal(await actualHome(restartedPid), expectedHome(path.join(mesh.home, '.codex')));
       assert.equal(launches().findLast(fields => fields[2] === plain.name)?.[4], plain.token);
-      assert.equal(actualHome(switchedPid), travelHome);
-      assert.equal(actualHome(travelPid), travelHome);
+      assert.equal(await actualHome(switchedPid), expectedHome(travelHome));
+      assert.equal(await actualHome(travelPid), expectedHome(travelHome));
+
+      const newAgentPid = async (name: string, previous: number) => {
+        for (let attempt = 0; attempt < 100; attempt++) {
+          const pid = pidOf(name);
+          if (pid > 0 && pid !== previous) return pid;
+          await sleep(50);
+        }
+        assert.fail('the account switch did not start a new agent');
+      };
+      const defaultTty = ttyOf(restartedPid);
+      const movedDefault = await decide(await requested(plain, 'work'), true);
+      assert.equal(movedDefault.state, 'completed', JSON.stringify(movedDefault));
+      const namedPid = await newAgentPid(plain.name, restartedPid);
+      await awaitExec(namedPid);
+      assert.equal(await actualHome(namedPid), expectedHome(workHome));
+      assert.equal(ttyOf(namedPid), defaultTty);
+      assert.equal(launches().findLast(fields => fields[2] === plain.name)?.[4], plain.token);
+      assert.deepEqual([pidOf(work.name), pidOf(travel.name)], [switchedPid, travelPid]);
+
+      const returnedDefault = await decide(await requested(work, 'default'), true);
+      assert.equal(returnedDefault.state, 'completed', JSON.stringify(returnedDefault));
+      const returnedPid = await newAgentPid(work.name, switchedPid);
+      await awaitExec(returnedPid);
+      assert.equal(await actualHome(returnedPid), expectedHome(path.join(mesh.home, '.codex')));
+      assert.equal(ttyOf(returnedPid), originalTty);
+      assert.equal(launches().findLast(fields => fields[2] === work.name)?.[4], work.token);
+      assert.deepEqual([pidOf(plain.name), pidOf(travel.name)], [namedPid, travelPid]);
     } finally { fs.rmSync(registry); }
   });
+
+  test('a bound Claude account switch keeps its conversation and terminal',
+    {skip: PROFILE_SKIP || (nativeCodexSwitch ? false : 'bound native switching is not enabled')}, async () => {
+      const registry = installNativeProfiles();
+      try {
+        const content = JSON.parse(fs.readFileSync(registry, 'utf8'));
+        const secondRoot = path.join(mesh.home, '.agent-accounts', 'claude-other', '.claude');
+        const roots = {default: path.join(mesh.home, '.claude'), client: clientClaude, other: secondRoot};
+        for (const id of ['client', 'other'] as const) {
+          const config = roots[id];
+          const history = path.join(config, 'projects');
+          fs.mkdirSync(history, {recursive: true, mode: 0o700});
+          content.profiles.push({backend: 'claude', id, label: id === 'client' ? 'Client' : 'Other',
+            enabled: true, roots: {config, history}});
+        }
+        fs.writeFileSync(registry, JSON.stringify(content));
+
+        const terminal = (pid: string) => {
+          const result = spawnSync('ps', ['-p', pid, '-o', 'tty='], {encoding: 'utf8'});
+          assert.ifError(result.error);
+          assert.equal(result.status, 0, result.stderr);
+          const tty = result.stdout.trim();
+          assert.match(tty, /^(?:pts\/\d+|ttys\w+)$/);
+          return tty;
+        };
+        for (const [from, to] of [['default', 'client'], ['client', 'other'], ['other', 'default']] as const) {
+          const session = await fixtureSession('claude', `native-claude-${from}`, from === 'default' ? undefined : from);
+          const launch = () => launches().findLast(fields => fields[2] === session.name)!;
+          const first = launch();
+          assert.equal(first[1], roots[from]);
+          const tty = terminal(first[5]!);
+          const transcript = (profile: keyof typeof roots) =>
+            path.join(roots[profile], 'projects', 'test-workspace', session.sid + '.jsonl');
+          const marker = `source transcript marker for ${session.name}`;
+          assert.equal(fs.existsSync(transcript(to)), false);
+          fs.appendFileSync(transcript(from), JSON.stringify({
+            type: 'user', sessionId: session.sid, message: {role: 'user', content: marker},
+          }) + '\n');
+          const switched = await decide(await requested(session, to), true);
+          assert.equal(switched.state, 'completed', JSON.stringify(switched));
+          for (let attempt = 0; attempt < 100 && launch()[5] === first[5]; attempt++) await sleep(50);
+          const resumed = launch();
+          assert.notEqual(resumed[5], first[5]);
+          assert.deepEqual(resumed.slice(1, 5), [roots[to], session.name, session.sid, session.token]);
+          assert.equal(terminal(resumed[5]!), tty);
+          assert.ok(fs.readFileSync(transcript(to), 'utf8').includes(marker));
+        }
+      } finally {fs.rmSync(registry);}
+    });
 
   test('a legacy request queued before native registry activation is refused on approval without a stop or copy',
     {skip: PROFILE_SKIP}, async () => {
@@ -270,7 +376,7 @@ describe('account switch requests', {skip: SKIP}, () => {
       await nativeProfiles();
       const decided = await decide(request, true);
       assert.equal(decided.state, 'failed', JSON.stringify(decided));
-      assert.equal(decided.result?.error, process.platform === 'linux'
+      assert.equal(decided.result?.error, nativeCodexSwitch
         ? 'Native account switch request has no valid binding' : 'Native profile switching is not qualified');
       assert.ok(!decided.result?.rolled_back, 'the source was never stopped');
       await unchangedSource(session, before, launchLog);
@@ -283,7 +389,7 @@ describe('account switch requests', {skip: SKIP}, () => {
   });
 
   test('the native migration marker refuses before preparing a missing legacy target folder',
-    {skip: process.platform === 'linux' ? 'native switches are qualified on Linux' : false}, async () => {
+    {skip: nativeCodexSwitch ? 'native Codex switching is qualified' : false}, async () => {
     const session = await codexSession('x-marker-refusal');
     const before = (await listed(session.name))!;
     const accountFile = path.join(mesh.confDir, 'accounts.json');
@@ -352,19 +458,7 @@ describe('account switch requests', {skip: SKIP}, () => {
     const pidOf = (name: string) => Number(fs.readFileSync(`${log}.${name}`, 'utf8').trim());
     const environment = (pid: number) => fs.readFileSync(`/proc/${pid}/environ`, 'utf8').split('\0');
     const actualHome = async (pid: number) => {
-      if (process.platform === 'darwin') {
-        // The live fixture keeps its account's rollout open on fd 3, even after exec.
-        const deadline = performance.now() + 5000;
-        while (performance.now() < deadline) {
-          const result = spawnSync('/usr/sbin/lsof', ['-nP', '-a', '-p', String(pid), '-d', '3', '-Fn'],
-            {encoding: 'utf8', timeout: Math.max(1, Math.ceil(deadline - performance.now()))});
-          assert.ifError(result.error);
-          const account = result.stdout.match(/^n(.+)\/sessions\/\d{4}\/\d{2}\/\d{2}\/rollout-[^/]+\.jsonl$/m);
-          if (result.status === 0 && account) return account[1];
-          await sleep(50);
-        }
-        assert.fail('the running fixture did not open its account rollout');
-      }
+      if (process.platform === 'darwin') return darwinAccountHome(pid);
       const env = environment(pid);
       const variable = env.find(item => item.startsWith('CODEX_HOME='));
       return variable ? variable.slice('CODEX_HOME='.length) : `${env.find(item => item.startsWith('HOME='))!.slice(5)}/.codex`;

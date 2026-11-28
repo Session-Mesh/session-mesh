@@ -76,7 +76,7 @@ let rec skip_nuls buffer position =
 
 let read_argv buffer ~argc ~start =
   let rec loop remaining position acc =
-    if remaining = 0 then Ok (List.rev acc)
+    if remaining = 0 then Ok (List.rev acc, position)
     else if position >= String.length buffer then
       malformed "procargs2: argv truncated (%d of %d strings)"
         (argc - remaining) argc
@@ -93,7 +93,7 @@ let read_argv buffer ~argc ~start =
    are skipped to find argv[0]. A leading empty argv[0] is a single NUL string
    and is therefore indistinguishable from that padding: it is lost, and the
    next argument is returned as argv[0]. *)
-let darwin_procargs2 buffer =
+let darwin_procargs2_parts buffer =
   if String.length buffer < 4 then
     malformed "procargs2: buffer shorter than 4 bytes"
   else
@@ -105,6 +105,63 @@ let darwin_procargs2 buffer =
       | None -> malformed "procargs2: unterminated exec path"
       | Some path_end ->
           read_argv buffer ~argc ~start:(skip_nuls buffer (path_end + 1))
+
+let darwin_procargs2 buffer =
+  Result.map fst (darwin_procargs2_parts buffer)
+
+let darwin_selected_environment ?(title_padding = false) buffer names =
+  let selected = List.map (fun name -> (name, name ^ "=")) names in
+  let matching_key item =
+    List.find_opt (fun (_, prefix) -> String.starts_with ~prefix item) selected
+  in
+  let rec scan position seen =
+    if position = String.length buffer then Ok seen
+    else if buffer.[position] = '\000' then
+      (* Darwin can return data after an empty entry. Keep checking for
+         selected keys and duplicates until the entire buffer is consumed. *)
+      scan (skip_nuls buffer position) seen
+    else
+      match String.index_from_opt buffer position '\000' with
+      | None -> malformed "procargs2: unterminated environment string"
+      | Some stop ->
+          let item = String.sub buffer position (stop - position) in
+          match matching_key item with
+          | None -> scan (stop + 1) seen
+          | Some (name, _) when List.mem_assoc name seen ->
+              malformed "procargs2: duplicate environment key"
+          | Some (name, prefix) ->
+              let length = String.length prefix in
+              let value = String.sub item length (String.length item - length) in
+              scan (stop + 1) ((name, value) :: seen)
+  in
+  match darwin_procargs2_parts buffer with
+  | Error error -> Error error
+  | Ok ([], _) -> malformed "procargs2: missing argv"
+  | Ok (argv, position) ->
+      (* An empty argv[0] can shift the first environment entry into argv.
+         Do not infer absence from that ambiguous buffer. *)
+      if List.exists (fun item -> Option.is_some (matching_key item)) argv then
+        malformed "procargs2: selected environment key in argument vector"
+      else
+        (* A rewritten process title can leave zero padding before the
+           inherited environment. *)
+        let next = skip_nuls buffer position in
+        if not title_padding && next <> position && next < String.length buffer then
+          malformed "procargs2: data after leading environment padding"
+        else scan next []
+
+let darwin_environment_matches ?(unset = []) buffer ~key ~expected =
+  let title_padding =
+    key = "CLAUDE_CONFIG_DIR"
+    || (key = "HOME" && List.mem "CLAUDE_CONFIG_DIR" unset)
+  in
+  Result.map
+    (fun selected ->
+      List.assoc_opt key selected = Some expected
+      && List.for_all
+           (fun name -> Option.value ~default:"" (List.assoc_opt name selected) = "")
+           unset)
+    (darwin_selected_environment ~title_padding buffer (key :: unset))
 
 (* [tpgid] is <= 0 when the process has no controlling terminal (Linux reports
    -1; 0 can appear on other kernels). Handing that back as a group id would

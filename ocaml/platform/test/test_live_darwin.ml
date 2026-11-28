@@ -40,12 +40,12 @@ let kill_and_reap pid =
   (try Unix.kill pid Sys.sigkill with Unix.Unix_error _ -> ());
   ignore (Unix.waitpid [] pid)
 
-let with_child program argv action =
+let with_child ?(env = Unix.environment ()) program argv action =
   let null = Unix.openfile "/dev/null" [ Unix.O_RDWR ] 0 in
   let pid =
     Fun.protect
       ~finally:(fun () -> Unix.close null)
-      (fun () -> Unix.create_process program argv null null null)
+      (fun () -> Unix.create_process_env program argv env null null null)
   in
   Fun.protect ~finally:(fun () -> kill_and_reap pid) (fun () -> action pid)
 
@@ -74,6 +74,49 @@ let test_command_line_self () =
   Alcotest.(check (list string))
     "argv" (Array.to_list Sys.argv)
     (ok_or_fail "argv" (command_line (Unix.getpid ())))
+
+let test_child_environment () =
+  let key = "MESH_TEST_PROFILE_ROOT" and expected = "/tmp/test-profile" in
+  let executable = Unix.realpath Sys.executable_name in
+  let argv = [| executable; "--environment-fixture" |] in
+  let history = "/tmp/pi-history" and overlay = "/tmp/overlays/session-test" in
+  with_child
+    ~env:[| key ^ "=" ^ expected; "MESH_TEST_OVERRIDE=present"; "MESH_TEST_EMPTY=";
+            "PI_CODING_AGENT_DIR=" ^ overlay; "PI_CODING_AGENT_SESSION_DIR=" ^ history |]
+    executable argv
+    (fun child ->
+      wait_for "exec test fixture" (fun () ->
+          match command_line child with
+          | Ok arguments when arguments = Array.to_list argv -> Some ()
+          | _ -> None);
+      let { incarnation; _ } = ok_or_fail "child" (process child) in
+      let matches ?unset ~incarnation expected =
+        darwin_process_environment_matches ?unset child ~incarnation ~key ~expected
+      in
+      Alcotest.(check bool) "expected profile" true
+        (ok_or_fail "match" (matches ~incarnation expected));
+      Alcotest.(check bool) "different profile" false
+        (ok_or_fail "mismatch" (matches ~incarnation "/tmp/other"));
+      Alcotest.(check bool) "present override refuses profile" false
+        (ok_or_fail "override"
+           (matches ~unset:[ "MESH_TEST_OVERRIDE" ] ~incarnation expected));
+      Alcotest.(check bool) "empty and absent overrides allow profile" true
+        (ok_or_fail "no override"
+           (matches ~unset:[ "MESH_TEST_EMPTY"; "MESH_TEST_ABSENT" ] ~incarnation expected));
+      let observe ~history ~overlay_root ~unset =
+        ok_or_fail "Pi profile observation"
+          (darwin_pi_profile_overlay child ~incarnation ~history ~overlay_root ~unset)
+      in
+      Alcotest.(check (option string)) "Pi history and overlay match" (Some overlay)
+        (observe ~history ~overlay_root:"/tmp/overlays" ~unset:[ "MESH_TEST_EMPTY" ]);
+      Alcotest.(check (option string)) "Pi history mismatch" None
+        (observe ~history:"/tmp/other-history" ~overlay_root:"/tmp/overlays" ~unset:[]);
+      Alcotest.(check (option string)) "Pi overlay outside permitted root" None
+        (observe ~history ~overlay_root:"/tmp/other" ~unset:[]);
+      Alcotest.(check (option string)) "Pi provider override" None
+        (observe ~history ~overlay_root:"/tmp/overlays" ~unset:[ "MESH_TEST_OVERRIDE" ]);
+      check_error "wrong incarnation" Not_found
+        (matches ~incarnation:(Int64.succ incarnation) expected))
 
 let test_working_directory_self () =
   Alcotest.(check string)
@@ -267,6 +310,7 @@ let macos_tests =
     Alcotest.test_case "working directory of self" `Quick
       test_working_directory_self;
     Alcotest.test_case "child process" `Quick test_child;
+    Alcotest.test_case "owned child environment" `Quick test_child_environment;
     Alcotest.test_case "session id of a setsid child" `Quick test_session_id;
     Alcotest.test_case "reaped child is Not_found" `Quick
       test_reaped_child_not_found;
