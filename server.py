@@ -1021,13 +1021,18 @@ _OPENCODE_RESUME_ARGS = {"--session", "-s", "--continue", "-c", "--fork"}
 
 
 def _opencode_resumed_id(words):
-    """The conversation ``--session``, ``-s`` or ``--session=`` names in an OpenCode command, if any."""
-    for index, word in enumerate(words):
-        if word in ("--session", "-s"):
-            return words[index + 1] if index + 1 < len(words) else ""
-        if word.startswith("--session="):
-            return word.split("=", 1)[1]
-    return None
+    """Read the single session selector from normalized OpenCode V2 argv."""
+    session = None
+    words = iter(words[1:])
+    for word in words:
+        name, separator, value = word.partition("=")
+        if name in ("--session", "-s"):
+            if session is not None:
+                raise web.HTTPConflict(text="Multiple OpenCode session selectors")
+            session = value if separator else next(words, "")
+        elif name in ("--prompt", "--log-level") and not separator:
+            next(words, None)
+    return session
 
 
 async def _opencode_command(command, cwd="/", environ=None, *, fresh=False, require_v2=False):

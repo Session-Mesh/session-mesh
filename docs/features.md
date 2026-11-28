@@ -1031,6 +1031,7 @@ and a state plugin (`opencode-mesh-plugin-v2/`). Differences from 1.x:
 - **Resume and restore.** `opencode --standalone --session <id>`, after checking that the conversation is in
   OpenCode's store (2.x would create an empty one); a conversation that is gone is refused, also when it is
   adopted from another terminal (checked before that agent is stopped) and on a restore, which keeps its entry.
+  Use a single session selector for the conversation you want to reopen.
   Options 2.x does not have (`--model`, `--mini`, `--replay-limit`, `--no-replay`) are dropped; `--pure`, `--agent`,
   `--server` and unknown options refuse the launch.
 - **Terminal.** Same alternate screen, mouse and bracketed paste; 2.x also sets focus reports, synchronized

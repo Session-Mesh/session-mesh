@@ -521,6 +521,7 @@
   "server.opencodeUnsupportedResumeRefused": "This OpenCode version is not supported by session-mesh (only 1.x and 2.x are): a conversation cannot be resumed",
   "list.opencodeUnreadableNotice": "OpenCode was not found or its version could not be read: launched without messaging or state tracking",
   "server.opencodeUnreadableResumeRefused": "The OpenCode version could not be read (opencode not found, or no version answer): a conversation cannot be resumed",
+  "server.opencodeMultipleSessions": "Choose one OpenCode conversation to resume.",
   "server.opencodeUnknownSession": "OpenCode 2 would start an empty conversation: the conversation is not in OpenCode's store, resume refused",
   "server.opencodeOptionRefused": "OpenCode 2 does not take the option {name}: launch refused rather than started without it",
   "list.pendingRestart": "restarts as soon as idle",

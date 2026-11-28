@@ -530,6 +530,7 @@
   "server.opencodeUnsupportedResumeRefused": "Cette version d'OpenCode n'est pas prise en charge par session-mesh (seules 1.x et 2.x le sont) : une conversation ne peut pas être reprise",
   "list.opencodeUnreadableNotice": "OpenCode est introuvable ou sa version est illisible : lancé sans messagerie ni suivi d'état",
   "server.opencodeUnreadableResumeRefused": "La version d'OpenCode n'a pas pu être lue (opencode introuvable, ou pas de réponse de version) : une conversation ne peut pas être reprise",
+  "server.opencodeMultipleSessions": "Choisissez une seule conversation OpenCode à reprendre.",
   "server.opencodeUnknownSession": "OpenCode 2 démarrerait une conversation vide : la conversation n'est pas dans la base d'OpenCode, reprise refusée",
   "server.opencodeOptionRefused": "OpenCode 2 ne connaît pas l'option {name} : lancement refusé plutôt que démarré sans elle",
   "list.pendingRestart": "relance dès que idle",
