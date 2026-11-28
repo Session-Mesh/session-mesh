@@ -10,7 +10,7 @@ import {test} from 'node:test';
 import {REPO, scratchHome, runServer, stopServer, removeScratch} from './mesh-server-lib.ts';
 import {startTestPtyhost} from './helpers/managed-test-ptyhost.ts';
 import {cleanupHistoricalFixture, onceAsync} from './helpers/historical-cleanup.ts';
-import {historicalArtifacts} from './helpers/historical-artifacts.ts';
+import {candidateHistoryFor, historicalArtifacts} from './helpers/historical-artifacts.ts';
 import {installFakeCodex, launchesIn} from './fake-codex-lib.ts';
 import {appendFixturePath} from './fixture-login-path.ts';
 import {request, waitFor} from './ptyhost-wire-lib.ts';
@@ -56,7 +56,7 @@ for (const removeAlias of [false,true]) test(`previous nightly account ${removeA
   assert.equal(sha(oldPlatform),nightly.platformSha);
   const oldHistory = nightly.history ? path.join(artifacts, nightly.history) : undefined;
   if (oldHistory) assert.equal(sha(oldHistory), nightly.historySha, 'historical history helper digest');
-  const candidateHistory = path.join(path.dirname(candidateHost), 'mesh-history');
+  const candidateHistory = candidateHistoryFor(candidateHost);
   const where = await scratchHome('mesh-historical-account-');
   const source = path.join(where.scratch,'old'), bin = path.join(where.scratch,'bin');
   const socket = path.join(where.home,'run/session-mesh/ptyhost.sock');

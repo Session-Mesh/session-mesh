@@ -8,7 +8,7 @@ import path from 'node:path';
 import {test} from 'node:test';
 import {selectHistoricalReleases, type Release} from '../tools/historical-release-selection.ts';
 import {verifyAsset} from '../tools/fetch-historical-releases.ts';
-import {historicalArtifacts} from './helpers/historical-artifacts.ts';
+import {candidateHistoryFor, historicalArtifacts} from './helpers/historical-artifacts.ts';
 
 const digest = `sha256:${'a'.repeat(64)}`;
 function release(tag_name: string, prerelease = false): Release {
@@ -78,5 +78,21 @@ test('dynamic manifest confines paths and rejects invalid digests', () => {
     if (previous === undefined) delete process.env.MESH_HISTORICAL_DYNAMIC;
     else process.env.MESH_HISTORICAL_DYNAMIC = previous;
     rmSync(dir, {recursive:true, force:true});
+  }
+});
+
+test('migration preflight requires the installed history helper next to the host', () => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'mesh-historical-candidate-'));
+  const host = path.join(dir, 'mesh-ptyhost');
+  const history = path.join(dir, 'mesh-history');
+  try {
+    assert.throws(() => candidateHistoryFor(host), /Build @install/);
+    writeFileSync(history, '#!/bin/sh\n', {mode: 0o600});
+    assert.throws(() => candidateHistoryFor(host), /Build @install/);
+    rmSync(history);
+    writeFileSync(history, '#!/bin/sh\n', {mode: 0o700});
+    assert.equal(candidateHistoryFor(host), history);
+  } finally {
+    rmSync(dir, {recursive: true, force: true});
   }
 });
