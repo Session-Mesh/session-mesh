@@ -171,6 +171,34 @@ def test_darwin_account_confirmation_is_bound_to_the_original_terminal(monkeypat
 
 
 
+@pytest.mark.parametrize("agent,variable,directory", [
+    ("codex", "CODEX_HOME", ".codex"),
+    ("claude", "CLAUDE_CONFIG_DIR", ".claude"),
+])
+@pytest.mark.parametrize("matches_home", [True, False])
+def test_darwin_default_switch_with_explicit_server_root(monkeypatch, agent, variable, directory, matches_home):
+    home = "/tmp/owner"
+    root = f"{home}/{directory}" if matches_home else "/tmp/other"
+    monkeypatch.setattr(server, "sys", SimpleNamespace(platform="darwin"))
+    monkeypatch.setattr(server, "os", SimpleNamespace(environ={"HOME": home, variable: root}, path=os.path))
+
+    async def observe(_source, _observed, kind, expected_root, *, default_home):
+        assert kind == agent and expected_root == root
+        assert default_home == (home if matches_home else None)
+        if default_home is None:
+            raise accountswitch.UnboundDefault("Agent account folder differs from the recorded profile")
+        return {"process_pid": 42, "process_start": "1234"}
+
+    monkeypatch.setattr(server, "_darwin_switch_observation", observe)
+    observed = {"type": agent, "pid": 42, "foreground": True}
+    if matches_home:
+        context = asyncio.run(server._switch_profile_context("default", agent, observed_agent=observed))
+        assert context["roots"]["config"] == root
+    else:
+        with pytest.raises(web.HTTPConflict):
+            asyncio.run(server._switch_profile_context("default", agent, observed_agent=observed))
+
+
 def test_approved_native_switch_does_not_fall_back_when_registry_disappears(monkeypatch):
     events = []
     item = {"source": {"agent": "codex"}, "from_account": "default", "account": "work",

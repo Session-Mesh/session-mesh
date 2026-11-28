@@ -944,8 +944,11 @@ async def _switch_profile_context(account, agent, expected_revision=None, observ
                     binding = await _darwin_switch_observation(source, observed_agent, agent, context["roots"]["config"])
                     return {**context, **binding}
                 selected = accountswitch.default_context(agent, os.environ)
-                variable, _ = accountswitch.profile_environment_keys(agent)
-                fallback_home = os.environ.get("HOME") if not os.environ.get(variable) else None
+                home = os.environ.get("HOME", "")
+                fallback_home = None
+                if (os.path.isabs(home) and "\x00" not in home
+                        and accountswitch.default_context(agent, {"HOME": home})["root"] == selected["root"]):
+                    fallback_home = home
                 binding = await _darwin_switch_observation(source, observed_agent, agent, selected["root"],
                                                           default_home=fallback_home)
                 selected.update(binding)
