@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Copyright (c) 2026 Atacama <contact@atacama.tech>
 import assert from 'node:assert/strict';
-import {readFileSync} from 'node:fs';
+import {accessSync, constants, readFileSync, statSync} from 'node:fs';
 import path from 'node:path';
 
 export type HistoricalRelease = {tag:string; archive:string; archiveSha:string; host:string; hostSha:string; platform?:string; platformSha?:string; history?:string; historySha?:string};
@@ -30,4 +30,17 @@ export function historicalArtifacts(root: string | undefined): {stable:Historica
     return entry as HistoricalRelease;
   };
   return {stable:parse('stable'), nightly:parse('nightly')};
+}
+
+
+/** The historical harness expects the candidate's installed sibling helper. */
+export function candidateHistoryFor(host: string): string {
+  const history = path.join(path.dirname(host), 'mesh-history');
+  try {
+    if (!statSync(history).isFile()) throw new Error('not a regular file');
+    accessSync(history, constants.X_OK);
+  } catch (cause) {
+    throw new Error('Candidate mesh-history is missing or not executable. Build @install and use the installed mesh-ptyhost.', {cause});
+  }
+  return history;
 }

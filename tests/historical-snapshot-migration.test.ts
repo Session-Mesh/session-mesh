@@ -11,7 +11,7 @@ import {test} from 'node:test';
 import {REPO, scratchHome, runServer, stopServer, removeScratch} from './mesh-server-lib.ts';
 import {startTestPtyhost} from './helpers/managed-test-ptyhost.ts';
 import {waitFor} from './ptyhost-wire-lib.ts';
-import {historicalArtifacts} from './helpers/historical-artifacts.ts';
+import {candidateHistoryFor, historicalArtifacts} from './helpers/historical-artifacts.ts';
 
 const artifacts = process.env.MESH_HISTORICAL_ARTIFACTS;
 const candidate = process.env.MESH_PTYHOST_CMD;
@@ -35,7 +35,7 @@ for (const version of versions) test(`${version.tag} real snapshot survives upgr
   assert.equal(sha(oldHost), version.hostSha, 'historical PTY host digest');
   const oldHistory = version.history ? path.join(artifacts, version.history) : undefined;
   if (oldHistory) assert.equal(sha(oldHistory), version.historySha, 'historical history helper digest');
-  const candidateHistory = path.join(path.dirname(candidate), 'mesh-history');
+  const candidateHistory = candidateHistoryFor(candidate);
   const where = await scratchHome('mesh-historical-migration-');
   // Do not inherit provider credentials or paths from the developer's environment.
   where.env = {HOME:where.home, PATH:'/usr/bin:/bin', LANG:'C.UTF-8', LANGUAGE:'en', SHELL:'/bin/bash',
