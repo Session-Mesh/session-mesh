@@ -513,3 +513,64 @@ let carry_pi_accounts ~uid ~file ~conversation ~from_account ~to_account
       bytes = carried.bytes;
       recovery_copies = 0;
     }
+
+let opencode_profile_lock = "opencode-profile"
+
+let exec_opencode_profile ~uid ~file ~profile ~revision ~executable ~args =
+  let* registry = resolver_result (R.load ~uid ~file) in
+  let* entry = resolver_result (R.find registry { backend = R.Opencode_v2; id = profile }) in
+  let* context =
+    resolver_result (R.launch_context ~uid ~expected_context:revision entry)
+  in
+  match List.assoc_opt "data" context.roots with
+  | Some data when not (Filename.is_relative executable)
+                  && Sys.getenv_opt "XDG_DATA_HOME" = Some data ->
+      Carry_target.with_lock ~shared:true ~uid ~target:data opencode_profile_lock (fun fd ->
+          try
+            Unix.clear_close_on_exec fd;
+            Unix.execv executable (Array.of_list (executable :: args))
+          with Unix.Unix_error _ ->
+            fail "helper-unavailable" "OpenCode executable unavailable")
+  | _ -> fail "profile-context-changed" "selected OpenCode data folder changed"
+
+let carry_opencode_accounts ~uid ~file ~binary ~home ~workspace ~source_runtime
+    ~target_runtime ~conversation ~from_account ~to_account ~source_revision
+    ~target_revision ~logical_id ~epoch ~receipt_directory ~operation_id =
+  let module Transfer = Mesh_opencode_transfer in
+  let* registry = resolver_result (R.load ~uid ~file) in
+  let find id = resolver_result (R.find registry { backend = R.Opencode_v2; id }) in
+  let* source = find from_account in
+  let* target = find to_account in
+  let* () =
+    if uid = Unix.geteuid () && from_account <> to_account
+       && R.context_revision source = Some source_revision
+       && R.context_revision target = Some target_revision
+    then Ok ()
+    else fail "profile-context-changed" "selected OpenCode account context changed"
+  in
+  let context entry revision runtime =
+    let* launch =
+      resolver_result (R.launch_context ~uid ~expected_context:revision entry)
+    in
+    let root role = List.assoc_opt role launch.roots in
+    match (root "config", root "data", root "state", root "cache") with
+    | Some config, Some data, Some state, Some cache ->
+        Ok { Transfer.home; config; data; state; cache; runtime; location = workspace }
+    | _ -> fail "account_folder_refused" "OpenCode account roots are unavailable"
+  in
+  let* source = context source source_revision source_runtime in
+  let* target = context target target_revision target_runtime in
+  let disjoint = try Transfer.disjoint source target with Unix.Unix_error _ -> false in
+  if not disjoint then
+    fail "account_folder_refused" "OpenCode account roots overlap"
+  else
+    let first, second =
+      if String.compare source.data target.data < 0 then (source.data, target.data)
+      else (target.data, source.data)
+    in
+    Carry_target.with_lock ~uid ~target:first opencode_profile_lock (fun _ ->
+        Carry_target.with_lock ~uid ~target:second opencode_profile_lock (fun _ ->
+            Transfer.run_fork ~binary ~source ~target ~parent_native_id:conversation
+              ~logical_id ~epoch ~source_profile:from_account ~target_profile:to_account
+              ~receipt_directory ~operation_id
+            |> Result.map_error (fun code -> { code; message = "OpenCode conversation transfer refused" })))

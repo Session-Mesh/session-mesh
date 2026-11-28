@@ -1,4 +1,4 @@
 (executable
  (name mesh_platform_main)
  (public_name mesh-platform)
- (libraries mesh_platform mesh_update mesh_accounts mesh_accounts_carry mesh_account_resolver mesh_agent_settings unix yojson))
+ (libraries mesh_platform mesh_update mesh_accounts mesh_accounts_carry mesh_opencode_transfer mesh_account_resolver mesh_agent_settings unix yojson))

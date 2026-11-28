@@ -511,7 +511,55 @@ let accounts_carry ?expected_contexts ?(legacy_only = false) file kind conversat
             (Carry.carry_accounts ?expected_contexts ~legacy_only ~uid ~getenv:Sys.getenv_opt
                ~file ~kind ~conversation ~from_account ~to_account ()))
 
+let accounts_carry_opencode file =
+  let answer =
+    match json_request 8192 with
+    | Some (`Assoc members) -> (
+        match List.sort (fun (a, _) (b, _) -> String.compare a b) members with
+        | [ ("binary", `String binary); ("conversation", `String conversation);
+            ("epoch", `Int epoch); ("from_account", `String from_account);
+            ("home", `String home); ("logical_id", `String logical_id);
+            ("operation_id", `String operation_id);
+            ("receipt_directory", `String receipt_directory);
+            ("source_revision", `String source_revision);
+            ("source_runtime", `String source_runtime);
+            ("target_revision", `String target_revision);
+            ("target_runtime", `String target_runtime);
+            ("to_account", `String to_account); ("workspace", `String workspace) ] ->
+            let module C = Mesh_accounts_carry in
+            C.carry_opencode_accounts ~uid:(Unix.geteuid ()) ~file ~binary ~home
+              ~workspace ~source_runtime ~target_runtime ~conversation ~from_account
+              ~to_account ~source_revision ~target_revision ~logical_id ~epoch
+              ~receipt_directory ~operation_id
+        | _ -> Error { Mesh_accounts_carry.code = "transfer_invalid_input";
+                       message = "Invalid OpenCode transfer request" })
+    | _ -> Error { Mesh_accounts_carry.code = "transfer_invalid_input";
+                   message = "Invalid OpenCode transfer request" }
+  in
+  match answer with
+  | Ok lineage ->
+      print_json (`Assoc [ ("lineage", Mesh_opencode_transfer.lineage_to_json lineage) ]);
+      0
+  | Error error ->
+      accounts_failure ~extra:[ ("code", `String error.code) ] error.message
+
 let run = function
+  | [ "accounts"; "opencode-launch-capabilities" ] ->
+      print_json (`Assoc [ ("profile_lock", `Bool true) ]);
+      0
+  | "accounts" :: "exec-opencode-profile" :: file :: profile :: revision ::
+      executable :: args ->
+      (match Mesh_accounts_carry.exec_opencode_profile ~uid:(Unix.geteuid ()) ~file
+               ~profile ~revision ~executable ~args with
+      | Ok _ -> 0
+      | Error error ->
+          accounts_failure ~extra:[ ("code", `String error.code) ] error.message)
+  | [ "accounts"; "carry-opencode"; file ] -> accounts_carry_opencode file
+  | [ "accounts"; "carry-capabilities"; "opencode" ] ->
+      let versions = List.map (fun value -> `String value) Mesh_opencode_transfer.supported_versions in
+      print_json (`Assoc [ ("version", `Int 1); ("revision_bound", `Bool true);
+                          ("opencode_versions", `List versions) ]);
+      0
   | [ "accounts"; "carry-capabilities"; "pi" ] ->
       print_json (`Assoc [ ("version", `Int 1); ("revision_bound", `Bool true) ]);
       0

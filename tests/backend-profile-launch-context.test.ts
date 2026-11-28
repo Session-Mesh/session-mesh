@@ -3,7 +3,8 @@
 
 // The native resolver and the shell command actually sent to the host share one selected profile.
 import assert from 'node:assert/strict';
-import {execFileSync} from 'node:child_process';
+import {execFileSync, spawn, spawnSync} from 'node:child_process';
+import {once} from "node:events";
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -822,4 +823,64 @@ async def main():
 asyncio.run(main())
 `;
   execFileSync(python, ['-I', '-c', script], {timeout: 10000});
+});
+
+test("OpenCode carry rejects malformed requests before reading the registry", {skip}, () => {
+  const capability = execFileSync(native, ["accounts", "carry-capabilities", "opencode"],
+    {encoding: "utf8"});
+  assert.deepEqual(JSON.parse(capability), {version: 1, revision_bound: true, opencode_versions: ["2.3.2", "2.4.2"]});
+  for (const input of ["{}", "[]", "{\"epoch\":1,\"epoch\":2}", " ".repeat(8193)]) {
+    const result = spawnSync(native, ["accounts", "carry-opencode", "/nonexistent"],
+      {encoding: "utf8", input, timeout: 5000});
+    assert.equal(result.status, 1);
+    assert.equal(JSON.parse(result.stdout).code, "transfer_invalid_input");
+  }
+});
+
+
+test("OpenCode launch retains a shared profile lock across exec", {skip}, async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "mesh-opencode-lock-"));
+  const registry = path.join(root, "accounts.json");
+  const profiles = ["a", "b"].map(id => ({
+    backend: "opencode-v2", id, label: id, enabled: true,
+    roots: Object.fromEntries(["config", "data", "state", "cache"].map(role => {
+      const directory = path.join(root, `${id}-${role}`);
+      fs.mkdirSync(directory, {mode: 0o700});
+      return [role, directory];
+    })),
+  }));
+  fs.writeFileSync(path.join(root, "backend-profiles.json"),
+    JSON.stringify({version: 1, profiles}), {mode: 0o600});
+  const revision = (profile: string) => JSON.parse(execFileSync(native,
+    ["accounts", "launch-context", registry, "opencode-v2", profile],
+    {encoding: "utf8"})).context.context_revision;
+  const directories = ["source-runtime", "target-runtime", "receipts"].map(name => {
+    const directory = path.join(root, name);
+    fs.mkdirSync(directory, {mode: 0o700});
+    return directory;
+  });
+  const args = ["accounts", "exec-opencode-profile", registry, "a", revision("a")];
+  const env = {...process.env, XDG_DATA_HOME: profiles[0].roots.data};
+  const running = spawn(native, [...args, process.execPath,
+    "-e", "console.log(\"ready\"); process.stdin.resume()"], {env});
+  const closed = once(running, "close");
+  try {
+    const [ready] = await once(running.stdout, "data", {signal: AbortSignal.timeout(5000)});
+    assert.equal(String(ready).trim(), "ready");
+    assert.equal(spawnSync(native, [...args, "/bin/true"], {env, timeout: 5000}).status, 0);
+    const blocked = spawnSync(native, ["accounts", "carry-opencode", registry], {
+      encoding: "utf8", timeout: 5000,
+      input: JSON.stringify({binary: "/unused", conversation: "ses_parent", epoch: 1,
+        from_account: "a", home: root, logical_id: "logical", operation_id: "transfer",
+        receipt_directory: directories[2], source_revision: revision("a"), source_runtime: directories[0],
+        target_revision: revision("b"), target_runtime: directories[1], to_account: "b", workspace: root}),
+    });
+    assert.equal(blocked.status, 1);
+    assert.equal(JSON.parse(blocked.stdout).code, "carry_in_progress");
+    assert.deepEqual(fs.readdirSync(directories[2]), []);
+  } finally {
+    running.stdin.end();
+    await closed;
+    fs.rmSync(root, {recursive: true, force: true});
+  }
 });

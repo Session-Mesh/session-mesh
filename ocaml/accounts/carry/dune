@@ -9,4 +9,4 @@
   (language c)
   (names carry_statvfs_stubs)
   (flags :standard -Wall -Wextra))
- (libraries mesh_accounts mesh_account_resolver mesh_safe_file unix yojson digestif))
+ (libraries mesh_accounts mesh_account_resolver mesh_safe_file mesh_opencode_transfer unix yojson digestif))
