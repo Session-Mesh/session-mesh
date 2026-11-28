@@ -719,6 +719,18 @@ def test_opencode2_fresh_prompt_can_contain_model_option_text():
         "opencode", "--standalone", "--prompt", "--model"]
 
 
+def test_opencode2_session_preflight_ignores_prompt_values():
+    assert server._opencode_resumed_id(
+        ["opencode", "--standalone", "--prompt", "--session=other", "-s=target"]
+    ) == "target"
+
+
+def test_opencode2_session_preflight_refuses_multiple_selectors():
+    with pytest.raises(server.web.HTTPConflict) as refused:
+        server._opencode_resumed_id(["opencode", "--session", "first", "-s=second"])
+    assert refused.value.text == "Multiple OpenCode session selectors"
+
+
 async def test_opencode1_fresh_keeps_model(monkeypatch):
     monkeypatch.setattr(server.agentmcp, "opencode_resolved", lambda _env: ("/usr/bin/opencode", 1))
     monkeypatch.setattr(server.agentmcp, "opencode_config", lambda **_kwargs: "config")
