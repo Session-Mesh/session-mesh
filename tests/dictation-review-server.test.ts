@@ -9,7 +9,7 @@ import os from 'node:os';
 import {build} from 'esbuild';
 import {fixture,identityHeaders,processBirth,until} from '../checks/dictation-fixture.ts';
 
-async function controlled(t:TestContext,childTempDepth=0){
+async function controlled(t:TestContext,childTempDepth=0,sessions=['alpha']){
   const directory=fs.mkdtempSync(path.join(os.tmpdir(),'mesh-admission-'));
   fs.chmodSync(directory,0o700);
   const worker=path.join(directory,'worker.cjs'),preload=path.join(directory,'hold.cjs');
@@ -31,15 +31,17 @@ http.createServer=function(options,listener){return create.call(this,options,(re
    return;
   }
   const end=res.end;res.end=function(...args){
-  const body=JSON.parse(args[0]);log({event:'held',path:req.url,job:body.job?.job_id??body.job_id});
+  const body=JSON.parse(args[0]);log({event:'held',path:req.url,status:res.statusCode,
+    next:body.next,prepared:typeof body.claim==='string'&&body.claim.length>0,
+    job:body.job?.job_id??body.job_id,error:body.error?.code});
   const timer=setInterval(()=>{if(fs.existsSync(release)){clearInterval(timer);end.apply(res,args);}},5);return res;
  };}return listener(req,res);
 });};`);
   await build({entryPoints:['backend/dictation-main.ts'],outfile:worker,bundle:true,platform:'node',format:'cjs',target:'node22',logLevel:'silent'});
   let f:Awaited<ReturnType<typeof fixture>>|undefined;
   t.after(async()=>{try{if(f)await f.close();}finally{fs.rmSync(directory,{recursive:true,force:true});}});
-  f=await fixture(true,false,undefined,{workerEntry:worker,workerPreload:preload,childTempDepth});
-   const events=():{event:string;path:string;job?:string}[]=>fs.existsSync(trace)?fs.readFileSync(trace,'utf8').trim().split('\n').filter(Boolean).map(line=>JSON.parse(line)):[];
+  f=await fixture(true,false,undefined,{workerEntry:worker,workerPreload:preload,childTempDepth,sessions});
+   const events=():{event:string;path:string;status?:number;next?:string;prepared?:boolean;job?:string;error?:string}[]=>fs.existsSync(trace)?fs.readFileSync(trace,'utf8').trim().split('\n').filter(Boolean).map(line=>JSON.parse(line)):[];
    const pauseRoutes=(paths:string[])=>fs.writeFileSync(control,JSON.stringify({paths}));
    const identity=()=>JSON.parse(fs.readFileSync(bootstrap,'utf8')) as {socket:string;pid:number};
    return {f,events,pause:(route:string)=>pauseRoutes([route]),pauseRoutes,
@@ -79,8 +81,6 @@ for(const credential of ['cookie','master'] as const)test(`HTTP admission rechec
   const headers={...auth,...identityHeaders()};
   if(mode==='commit reply'){
     f.setResponse('application/json','{"text":"synthetic retained text"}');
-    const admitted=await f.call('/api/transcribe','POST',headers,'synthetic audio');assert.equal(admitted.status,202);
-    await until(async()=>(await f.call(`/api/transcribe/${admitted.body.job_id}`,'GET',headers)).body.state==='ready');
     c.pause('/internal/relay/commit');
   }else if(mode==='preparation reply')c.pause('/internal/relay/upload');
   let held:((created?:number)=>void)|undefined,calls=0;
@@ -92,6 +92,12 @@ for(const credential of ['cookie','master'] as const)test(`HTTP admission rechec
   const pending=f.call('/api/transcribe','POST',headers,'synthetic audio');
   void pending.catch(()=>{});
   await until(()=>held!==undefined||c.events().some(event=>event.event==='held'));
+  if(mode==='preparation reply'||mode==='commit reply'){
+    const route=mode==='preparation reply'?'/internal/relay/upload':'/internal/relay/commit';
+    const reply=c.events().find(event=>event.event==='held'&&event.path===route);
+    assert.equal(reply?.status,200,'the held phase succeeded before generation changed');
+    assert.equal(reply.next,mode==='preparation reply'?'commit':'done');
+  }
   const generation=path.join(f.config,'cookie-generation');
   fs.writeFileSync(generation,String(Number(fs.readFileSync(generation,'utf8'))+1));
   if(held)held();else c.release();
@@ -159,10 +165,10 @@ test('deep child TMPDIR does not lengthen the private worker socket or break the
 
 for(const phase of ['preparation reply','commit reply'] as const)
 for(const credential of ['cookie','master'] as const)test(`worker loss during ${credential} ${phase} and concurrent logout stays fenced`,async t=>{
-  const c=await controlled(t),f=c.f,identity=c.identity();
+  const c=await controlled(t,0,['alpha','beta']),f=c.f,identity=c.identity();
   const login=await f.call(`/login?token=${encodeURIComponent(f.token)}`);
   const cookie={Cookie:login.headers['set-cookie']![0]!.split(';')[0]!};
-  const headers={...(credential==='cookie'?cookie:f.auth),...identityHeaders()};
+  const headers={...(credential==='cookie'?cookie:f.auth),...identityHeaders(),'X-Mesh-Session':'beta'};
   let priorJob:string|undefined;
   if(phase==='preparation reply'){
     const seed={...f.auth,...identityHeaders()};
@@ -178,7 +184,13 @@ for(const credential of ['cookie','master'] as const)test(`worker loss during ${
 
   async function finish(pending:ReturnType<typeof f.call>){
     await until(()=>c.events().some(event=>event.event==='held'&&event.path!=='/internal/principal'));
-    const job=priorJob??c.events().find(event=>event.event==='held'&&event.job)?.job;
+    const phaseReply=c.events().find(event=>event.event==='held'&&
+      event.path===(phase==='preparation reply'?'/internal/relay/upload':'/internal/relay/commit'));
+    assert.equal(phaseReply?.status,200,'the held reply must be a successful relay phase');
+    assert.equal(phaseReply?.next,phase==='preparation reply'?'commit':'done');
+    if(phase==='preparation reply')assert.equal(phaseReply.prepared,true,'the pending upload was prepared');
+    else assert.ok(phaseReply.job,'the pending transfer was committed');
+    const job=priorJob??phaseReply.job;
     assert.ok(job,'fixture observed an actual prepared/committed job');
     if(phase==='commit reply')await until(()=>f.upstreamCalls===1);
     const logout=f.call('/api/logout-all','POST',cookie);

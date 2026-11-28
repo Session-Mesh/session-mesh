@@ -175,7 +175,9 @@ test('a throwing startup callback still closes the fixture', {timeout: 10000}, a
 });
 
 test('cancelling startup preserves shutdown and reaps the partial worker',{timeout:10000},async t=>{
-  const c=workerFixture(t,'process.stdin.resume();setInterval(()=>{},1000);');
+  const c=workerFixture(t,`process.stdin.once('end',()=>{
+    fs.rmSync(directory,{recursive:true,force:true});process.exit(0);
+  });process.stdin.resume();setInterval(()=>{},1000);`);
   let child:ChildProcess|undefined;
   const pending=fixture(true,false,undefined,{workerEntry:c.entry,onSpawn:value=>{child=value;}});
   void pending.catch(()=>{});
