@@ -29,7 +29,10 @@ LOG = ROOT / "runs.log"
 STATE = ROOT / "state.json"
 THREAD = "0cb916db-26aa-40f2-86b5-1ba81b225fd2"
 def queue(enabled=True, clock=None):
-    async def verify(name, created): return THREAD
+    async def verify(name, created):
+        return {"host": "42:123", "session": name, "created": created, "nonce": "a" * 32,
+                "pid": 24, "start": "100", "thread": THREAD,
+                "home": str(ROOT / name), "runtime": str(ROOT / "runtime")}
     return agentwake.CodexQueue(STATE, lambda: {"PATH": str(BIN)}, verify, timeout=5, enabled=enabled,
                                 **({"clock": clock} if clock else {}))
 def post(q, name, created, n):
@@ -45,6 +48,127 @@ ${code}`], {encoding: 'utf8', env: {PATH: process.env.PATH, HOME: dir, TMPDIR: d
 
 const UNCONFIRMED = {ok: false, reason: 'unconfirmed'};
 const ACCEPTED = {ok: true, accepted: true};
+
+test('Linux startup context reads distinct synthetic process homes and refuses uncertain identity', {skip: process.platform !== 'linux'}, () => {
+  const result = scenario(`
+PROC = ROOT / "fake-proc"; PROC.mkdir()
+def add(pid, home, start):
+    folder = PROC / str(pid); folder.mkdir()
+    (folder / "stat").write_bytes(b"1 (codex) " + b" ".join([b"S"] * 19 + [start.encode()]))
+    (folder / "environ").write_bytes(("HOME=" + str(ROOT) + "\\0CODEX_HOME=" + str(home)
+        + "\\0XDG_RUNTIME_DIR=" + str(ROOT / "runtime") + "\\0OTHER=synthetic-secret\\0").encode())
+    return folder
+a = add(101, ROOT / "alpha", "100")
+b = add(102, ROOT / "beta", "200")
+first = agentwake._codex_startup_context(101, "100", proc_root=PROC)
+second = agentwake._codex_startup_context(102, "200", proc_root=PROC)
+wrong_start = agentwake._codex_startup_context(101, "101", proc_root=PROC)
+env = (a / "environ").read_bytes()
+(a / "environ").write_bytes(env + b"CODEX_HOME=/substituted\\0")
+duplicate = agentwake._codex_startup_context(101, "100", proc_root=PROC)
+(a / "environ").write_bytes(env + b"OPENAI_API_KEY=synthetic-secret\\0")
+override = agentwake._codex_startup_context(101, "100", proc_root=PROC)
+(a / "environ").write_bytes(b"HOME=" + str(ROOT).encode() + b"\\0XDG_RUNTIME_DIR=" + str(ROOT / "runtime").encode() + b"\\0")
+default = agentwake._codex_startup_context(101, "100", proc_root=PROC)
+(a / "environ").write_bytes(b"HOME=relative\\0XDG_RUNTIME_DIR=/tmp\\0")
+relative = agentwake._codex_startup_context(101, "100", proc_root=PROC)
+(a / "environ").write_bytes(env)
+original_open = pathlib.Path.open
+def changing_stat(path, *args, **kwargs):
+    if path == a / "environ":
+        (a / "stat").write_bytes(b"1 (codex) " + b" ".join([b"S"] * 19 + [b"101"]))
+    return original_open(path, *args, **kwargs)
+pathlib.Path.open = changing_stat
+try:
+    changed = agentwake._codex_startup_context(101, "100", proc_root=PROC)
+finally:
+    pathlib.Path.open = original_open
+print(json.dumps({"first": first, "second": second, "default": default, "wrong": wrong_start,
+                  "duplicate": duplicate, "override": override, "relative": relative, "changed": changed}))
+`);
+  assert.notEqual(result.first.home, result.second.home);
+  assert.match(result.first.home, /\/alpha$/);
+  assert.match(result.second.home, /\/beta$/);
+  assert.match(result.default.home, /\/\.codex$/);
+  assert.deepEqual([result.wrong, result.duplicate, result.override, result.relative, result.changed], [null, null, null, null, null]);
+  assert.equal(JSON.stringify(result).includes('synthetic-secret'), false);
+});
+
+test('candidate wake bindings reject stale or malformed identity fields without activating dispatch', () => {
+  const result = scenario(`
+binding = {"host": "42:123", "session": "one", "created": 12.0, "nonce": "a" * 32,
+           "pid": 24, "start": "100", "thread": THREAD, "home": str(ROOT / "alpha"),
+           "runtime": str(ROOT / "run")}
+changes = {"host": "42:124", "session": "two", "created": 13.0, "nonce": "b" * 32,
+           "pid": 25, "start": "101", "thread": "0cb916db-26aa-40f2-86b5-1ba81b225fd3",
+           "home": str(ROOT / "beta"), "runtime": str(ROOT / "run2")}
+stale = [agentwake._same_wake_binding(binding, {**binding, key: value}) for key, value in changes.items()]
+bad = [{**binding, "created": True}, {**binding, "created": 10**500}, {**binding, "pid": True},
+       {**binding, "home": "relative"}, {**binding, "home": "/a/../b"},
+       {**binding, "runtime": "/bad\\x00path"}, {**binding, "extra": "x"}]
+print(json.dumps({"same": agentwake._same_wake_binding(binding, dict(binding)), "stale": stale,
+                  "malformed": [agentwake._valid_wake_binding(item) for item in bad]}))
+`);
+  assert.equal(result.same, true);
+  assert.deepEqual(result.stale, Array(9).fill(false));
+  assert.deepEqual(result.malformed, Array(7).fill(false));
+});
+
+test('unbound aliases do not launch a wake when the verifier cannot establish a home', () => {
+  const result = scenario(`
+(BIN / "codex").write_text("#!/bin/sh\\nprintf '%s\\n' \\\"\u0024{CODEX_HOME-unset}\\\" >> " + str(LOG) + "\\n")
+import ptyhost
+os.environ["PATH"] = str(BIN)
+os.environ["CODEX_HOME"] = str(ROOT / "server-home")
+async def verify(name, created): return THREAD
+q = agentwake.CodexQueue(STATE, ptyhost.clean_env, verify, enabled=True)
+def send(name, n, account):
+    return asyncio.run(q.post({"name": name, "created": 1.0, "notification_id": "%032x" % n,
+                               "account": account}, {"thread": THREAD}))
+answers = [send("a", 1, "alpha"), send("b", 2, "beta")]
+print(json.dumps({"answers": answers, "ran": LOG.exists(), "recorded": STATE.exists()}))
+`);
+  assert.deepEqual(result.answers, [{ok: false, reason: 'account_unverified'}, {ok: false, reason: 'account_unverified'}]);
+  assert.equal(result.ran, false);
+  assert.equal(result.recorded, false);
+});
+
+test('queue receives each verified synthetic home and runtime without persisting them', () => {
+  const result = scenario(`
+(BIN / "codex").write_text("#!/bin/sh\\nprintf '%s|%s\\n' \\\"\u0024CODEX_HOME\\\" \\\"\u0024XDG_RUNTIME_DIR\\\" >> " + str(LOG) + "\\n")
+async def verify(name, created):
+    return {"host": "42:123", "session": name, "created": created, "nonce": "a" * 32,
+            "pid": 24 if name == "alpha" else 25, "start": "100", "thread": THREAD,
+            "home": str(ROOT / name), "runtime": str(ROOT / "runtime")}
+q = agentwake.CodexQueue(STATE, lambda: {"PATH": str(BIN), "MESH_SECRET": "synthetic-secret"}, verify, enabled=True)
+answers = [post(q, "alpha", 1.0, 1), post(q, "beta", 2.0, 2)]
+print(json.dumps({"answers": answers, "homes": LOG.read_text().splitlines(),
+                  "state": STATE.read_text(), "root": str(ROOT)}))
+`);
+  assert.deepEqual(result.answers, [ACCEPTED, ACCEPTED]);
+  assert.deepEqual(result.homes, [`${result.root}/alpha|${result.root}/runtime`, `${result.root}/beta|${result.root}/runtime`]);
+  assert.equal(result.state.includes(result.root), false);
+  assert.equal(result.state.includes('synthetic-secret'), false);
+});
+
+test('a changed binding after recording is not launched or automatically replayed', () => {
+  const result = scenario(`
+calls = [0]
+async def verify(name, created):
+    calls[0] += 1
+    return {"host": "42:123", "session": name, "created": created, "nonce": "a" * 32,
+            "pid": 24, "start": "100", "thread": THREAD,
+            "home": str(ROOT / ("alpha" if calls[0] == 1 else "beta")), "runtime": str(ROOT / "runtime")}
+q = agentwake.CodexQueue(STATE, lambda: {"PATH": str(BIN)}, verify, enabled=True)
+first = post(q, "a", 1.0, 1)
+again = post(q, "a", 1.0, 1)
+print(json.dumps({"first": first, "again": again, "runs": runs(), "calls": calls[0]}))
+`);
+  assert.deepEqual(result.first, UNCONFIRMED);
+  assert.deepEqual(result.again, UNCONFIRMED);
+  assert.equal(result.runs, 0);
+  assert.equal(result.calls, 2);
+});
 
 test('a repair is a durable marker: a restart before any retain still runs nothing, and a post is refused meanwhile', () => {
   const result = scenario(`

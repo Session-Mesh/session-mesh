@@ -2035,7 +2035,8 @@ Limits of this version:
   exits, a `claude` typed in the same pane runs under the default account.
 - The history panel, "Resume" from the history, and moving in an agent running in another terminal
   only know the default account's folders.
-- Waking Codex with `codex queue` (below) reaches the default Codex home, not an alias's.
+- The opt-in Codex queue wake uses the foreground agent's observed initial home on Linux when it
+  can identify it; otherwise it is withheld. Delivery to a real session remains unverified (below).
 - A new session that an agent requests (and you approve) starts under the default account, even
   when the requesting session runs under an alias.
 - The session list's details for a Claude session under an alias (its conversation id and last
@@ -2106,7 +2107,12 @@ these fails.
 With the setting on, the mesh wakes a Codex session by running `codex queue --thread <conversation id> --message <fixed
 line>` (no `--resume`) for the exact conversation the session holds open. It uses the `codex` first on
 the PATH that sessions get (`~/.local/bin` included) as an absolute path, with a short environment
-(no `MESH_*` name, no secret) and at most 15 seconds and 64 KiB of output. Each attempt is recorded
+(no `MESH_*` name, no secret) and at most 15 seconds and 64 KiB of output. On Linux, it reads the
+foreground agent's initial `CODEX_HOME` and `XDG_RUNTIME_DIR`, and rechecks the host, session,
+process and conversation before launch. If these cannot be identified, it does not launch the wake.
+This is an observation of the process's initial environment: it cannot detect every subsequent
+in-process change, and the final recheck is not atomic with starting `codex queue`. On other platforms
+the account context cannot yet be established and this wake is withheld. Each attempt is recorded
 in `codex-queue-wakes.json` in the configuration folder (0600) before the process starts and is never
 repeated: a session whose attempt failed shows the unconfirmed mark until its inbox is read. A session
 that was alive when the state file was found damaged (the file is kept next to it as
@@ -2117,8 +2123,11 @@ neither read nor written.
 `MESH_CODEX_QUEUE_TIMEOUT_SECONDS` (1 to 60) shortens the limit for tests, and `MESH_CODEX_QUEUE_MAX_TRACKED` (1 to 1024) the number of attempts kept.
 
 Known limits of this wake: one `codex queue` is run per notification (the notifications of one Codex
-turn are not grouped); the conversation is checked again just before the attempt is recorded, not between
-that record and the exec; two servers sharing one configuration folder are not supported for this wake; and
+turn are not grouped). The host, session, foreground agent, conversation and observed initial home and
+runtime are rechecked after the attempt is recorded; a changed or unavailable binding leaves the
+attempt unconfirmed without starting the command. This recheck does not prove the agent's current
+in-process environment and is not atomic with the queue process starting. Two servers sharing one
+configuration folder are not supported for this wake, and
 the `codex` found first on the PATH that sessions get is trusted, as is every directory of that PATH;
 and a wake withheld because every one of the 1024 kept attempts is in doubt is retried like a transport
 failure, so the retry backoff (up to 60 seconds) applies to the wakes of every agent until room exists

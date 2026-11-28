@@ -6,9 +6,11 @@
 import asyncio
 import contextlib
 import json
+import math
 import os
 import re
 import shutil
+import sys
 import time
 from pathlib import Path
 
@@ -203,6 +205,87 @@ QUEUE_ENV_KEYS = ("HOME", "USER", "LOGNAME", "PATH", "LANG", "LC_ALL", "LC_CTYPE
 QUEUE_OUTPUT_MAX = 64 * 1024
 QUEUE_MAX_TRACKED = 1024
 _QUEUE_STATES = frozenset(("started", "queued", "unconfirmed", "cleared"))
+
+
+def _valid_wake_binding(candidate):
+    """Validate an observed binding's shape, not its provenance or atomicity.
+
+    The current Linux observation is not a host attestation of in-process state;
+    the opt-in queue operation remains non-atomic with process changes.
+    """
+    keys = {"host", "session", "created", "nonce", "pid", "start", "thread", "home", "runtime"}
+    if not isinstance(candidate, dict) or set(candidate) != keys:
+        return False
+    created = candidate["created"]
+    if (not isinstance(candidate["host"], str) or not re.fullmatch(r"[0-9]{1,10}:[0-9]{1,20}", candidate["host"])
+            or not isinstance(candidate["session"], str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,48}", candidate["session"])
+            or isinstance(created, bool) or not isinstance(created, (int, float)) or not 0 <= created <= 10**12
+            or not math.isfinite(created)
+            or not isinstance(candidate["nonce"], str) or not re.fullmatch(r"[0-9a-f]{32}", candidate["nonce"])
+            or type(candidate["pid"]) is not int or not 0 < candidate["pid"] <= 2**31 - 1
+            or not isinstance(candidate["start"], str) or not re.fullmatch(r"[1-9][0-9]{0,19}", candidate["start"])
+            or not isinstance(candidate["thread"], str) or THREAD_RE.fullmatch(candidate["thread"]) is None):
+        return False
+    for key in ("home", "runtime"):
+        value = candidate[key]
+        if not isinstance(value, str) or not os.path.isabs(value) or "\0" in value or os.path.normpath(value) != value:
+            return False
+        try:
+            if len(value.encode("utf-8")) > 4096:
+                return False
+        except UnicodeEncodeError:
+            return False
+    return True
+
+
+def _same_wake_binding(approved, observed):
+    """Compare complete validated witnesses; this alone does not authenticate either."""
+    return _valid_wake_binding(approved) and _valid_wake_binding(observed) and approved == observed
+
+
+def _codex_startup_context(pid, expected_start=None, *, proc_root=Path("/proc")):
+    """Observe an owned Linux process's initial home/runtime, not current in-process state.
+
+    This is not a wake authorization: the caller still needs authenticated foreground,
+    session and conversation identity. This observation and a later process launch
+    are not atomic; the agent may exec or change its state between them.
+    """
+    if (sys.platform != "linux" or type(pid) is not int or pid <= 0
+            or (expected_start is not None and (not isinstance(expected_start, str)
+                or not re.fullmatch(r"[1-9][0-9]{0,19}", expected_start)))):
+        return None
+    folder = proc_root / str(pid)
+    selected = {b"HOME", b"CODEX_HOME", b"XDG_RUNTIME_DIR", b"OPENAI_API_KEY", b"CODEX_API_KEY",
+                b"CODEX_ACCESS_TOKEN", b"OPENAI_BASE_URL"}
+    try:
+        if folder.stat().st_uid != os.geteuid():
+            return None
+        def start_time():
+            return (folder / "stat").read_bytes().rsplit(b")", 1)[1].split()[19].decode("ascii")
+        observed_start = start_time()
+        if not re.fullmatch(r"[1-9][0-9]{0,19}", observed_start) or (expected_start and observed_start != expected_start):
+            return None
+        with (folder / "environ").open("rb") as handle:
+            raw = handle.read(2_000_001)
+        if len(raw) > 2_000_000 or start_time() != observed_start or folder.stat().st_uid != os.geteuid():
+            return None
+        values = {}
+        for part in raw.split(b"\0"):
+            key, separator, value = part.partition(b"=")
+            if separator and key in selected:
+                if key in values:
+                    return None
+                values[key] = value.decode("utf-8")
+        if any(values.get(key) for key in (b"OPENAI_API_KEY", b"CODEX_API_KEY", b"CODEX_ACCESS_TOKEN", b"OPENAI_BASE_URL")):
+            return None
+        home = values.get(b"CODEX_HOME") or os.path.join(values.get(b"HOME", ""), ".codex")
+        runtime = values.get(b"XDG_RUNTIME_DIR", "")
+        for value in (home, runtime):
+            if not os.path.isabs(value) or os.path.normpath(value) != value or len(value.encode("utf-8")) > 4096:
+                return None
+        return {"home": home, "runtime": runtime, "pid": pid, "start": observed_start}
+    except (OSError, UnicodeError, IndexError, ValueError):
+        return None
 
 
 def _queue_seconds():
@@ -423,7 +506,11 @@ class CodexQueue:
             return self._known_answer(known)
         if not isinstance(thread, str) or THREAD_RE.fullmatch(thread) is None:
             return {"ok": False, "reason": "stale_incarnation"}
-        if await self._verify(request["name"], request["created"]) != thread:
+        binding = await self._verify(request["name"], request["created"])
+        if not _valid_wake_binding(binding):
+            return {"ok": False, "reason": "account_unverified"}
+        if (binding["session"] != request["name"] or binding["created"] != request["created"]
+                or binding["thread"] != thread):
             return {"ok": False, "reason": "stale_incarnation"}   # not the same conversation any more
         binary = self.executable()
         if binary is None:
@@ -442,7 +529,11 @@ class CodexQueue:
         except OSError:
             del self._entries[notification]
             return {"ok": False, "reason": "state_unwritable"}  # nothing run: a record that cannot be made durable sends nothing
-        outcome = await self._run(binary, thread)
+        if not _same_wake_binding(binding, await self._verify(request["name"], request["created"])):
+            self._entries[notification]["state"] = "unconfirmed"
+            self._save_quietly()
+            return {"ok": False, "reason": "unconfirmed"}
+        outcome = await self._run(binary, thread, binding)
         self._entries[notification]["state"] = "queued" if outcome else "unconfirmed"
         self._save_quietly()     # not written: "started" stays on disk, read as unconfirmed, never replayed
         if outcome:
@@ -463,13 +554,15 @@ class CodexQueue:
             return {"ok": True, "accepted": True}
         return {"ok": False, "reason": "unconfirmed"}
 
-    async def _run(self, binary, thread):
+    async def _run(self, binary, thread, binding):
         """True only when the process exited 0 within the time and output limits."""
         argv = [binary, "queue", "--thread", thread, "--message", QUEUE_TEXT]
         try:
+            environment = queue_environment(self._environment())
+            environment.update(CODEX_HOME=binding["home"], XDG_RUNTIME_DIR=binding["runtime"])
             process = await asyncio.create_subprocess_exec(
                 *argv, stdin=asyncio.subprocess.DEVNULL, stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE, cwd="/", env=queue_environment(self._environment()),
+                stderr=asyncio.subprocess.PIPE, cwd="/", env=environment,
                 start_new_session=True)
         except (OSError, ValueError):
             return False
